@@ -138,7 +138,7 @@ fn prepare_extrinsics_input_inner<'a, B, H, Number>(
 		Number: BlockNumber,
 {
 	changes.changes(child_info.as_ref())
-		.filter(|( _, v)| v.extrinsics().is_some())
+		.filter(|( _, v)| v.extrinsics().len() > 0)
 		.try_fold(BTreeMap::new(), |mut map: BTreeMap<&[u8], (ExtrinsicIndex<Number>, Vec<u32>)>, (k, v)| {
 			match map.entry(k) {
 				Entry::Vacant(entry) => {
@@ -159,10 +159,7 @@ fn prepare_extrinsics_input_inner<'a, B, H, Number>(
 						}
 					};
 
-					let extrinsics = v.extrinsics()
-						.expect("filtered by filter() call above; qed")
-						.cloned()
-						.collect();
+					let extrinsics = v.extrinsics().cloned().collect();
 					entry.insert((ExtrinsicIndex {
 						block: block.clone(),
 						key: k.to_vec(),
@@ -173,9 +170,7 @@ fn prepare_extrinsics_input_inner<'a, B, H, Number>(
 					// AND we are checking it before insertion
 					let extrinsics = &mut entry.get_mut().1;
 					extrinsics.extend(
-						v.extrinsics()
-							.expect("filtered by filter() call above; qed")
-							.cloned()
+						v.extrinsics().cloned()
 					);
 					extrinsics.sort_unstable();
 				},

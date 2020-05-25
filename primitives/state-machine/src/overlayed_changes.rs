@@ -69,7 +69,7 @@ pub struct OverlayedValue {
 	value: Option<StorageValue>,
 	/// The set of extrinsic indices where the values has been changed.
 	/// Is filled only if runtime has announced changes trie support.
-	extrinsics: Option<BTreeSet<u32>>,
+	extrinsics: BTreeSet<u32>,
 }
 
 /// Prospective or committed overlayed change set.
@@ -191,8 +191,8 @@ impl OverlayedValue {
 	}
 
 	/// List of indices of extrinsics which modified the value using this overlay.
-	pub fn extrinsics(&self) -> Option<impl Iterator<Item=&u32>> {
-		self.extrinsics.as_ref().map(|v| v.iter())
+	pub fn extrinsics(&self) -> impl ExactSizeIterator<Item=&u32> {
+		self.extrinsics.iter()
 	}
 }
 
@@ -260,8 +260,7 @@ impl OverlayedChanges {
 			entry.value = Some(Default::default());
 		}
 		if let Some(extrinsic) = extrinsic_index {
-			entry.extrinsics.get_or_insert_with(Default::default)
-				.insert(extrinsic);
+			entry.extrinsics.insert(extrinsic);
 		}
 		entry.value.as_mut().expect("Initialized above; qed")
 	}
@@ -300,8 +299,7 @@ impl OverlayedChanges {
 		entry.value = val;
 
 		if let Some(extrinsic) = extrinsic_index {
-			entry.extrinsics.get_or_insert_with(Default::default)
-				.insert(extrinsic);
+			entry.extrinsics.insert(extrinsic);
 		}
 	}
 
@@ -327,8 +325,7 @@ impl OverlayedChanges {
 		entry.value = val;
 
 		if let Some(extrinsic) = extrinsic_index {
-			entry.extrinsics.get_or_insert_with(Default::default)
-				.insert(extrinsic);
+			entry.extrinsics.insert(extrinsic);
 		}
 	}
 
@@ -351,8 +348,7 @@ impl OverlayedChanges {
 
 		map_entry.0.values_mut().for_each(|e| {
 			if let Some(extrinsic) = extrinsic_index {
-				e.extrinsics.get_or_insert_with(Default::default)
-					.insert(extrinsic);
+				e.extrinsics.insert(extrinsic);
 			}
 
 			e.value = None;
@@ -364,11 +360,10 @@ impl OverlayedChanges {
 					map_entry.0.insert(key.clone(), OverlayedValue {
 						value: None,
 						extrinsics: extrinsic_index.map(|i| {
-							let mut e = value.extrinsics.clone()
-								.unwrap_or_else(|| BTreeSet::default());
+							let mut e = value.extrinsics.clone();
 							e.insert(i);
 							e
-						}),
+						}).unwrap_or_else(Default::default),
 					});
 				}
 			}
@@ -391,8 +386,7 @@ impl OverlayedChanges {
 				entry.value = None;
 
 				if let Some(extrinsic) = extrinsic_index {
-					entry.extrinsics.get_or_insert_with(Default::default)
-						.insert(extrinsic);
+					entry.extrinsics.insert(extrinsic);
 				}
 			}
 		}
@@ -405,8 +399,7 @@ impl OverlayedChanges {
 				entry.value = None;
 
 				if let Some(extrinsic) = extrinsic_index {
-					entry.extrinsics.get_or_insert_with(Default::default)
-						.insert(extrinsic);
+					entry.extrinsics.insert(extrinsic);
 				}
 			}
 		}
@@ -429,8 +422,7 @@ impl OverlayedChanges {
 				entry.value = None;
 
 				if let Some(extrinsic) = extrinsic_index {
-					entry.extrinsics.get_or_insert_with(Default::default)
-						.insert(extrinsic);
+					entry.extrinsics.insert(extrinsic);
 				}
 			}
 		}
@@ -444,8 +436,7 @@ impl OverlayedChanges {
 					entry.value = None;
 
 					if let Some(extrinsic) = extrinsic_index {
-						entry.extrinsics.get_or_insert_with(Default::default)
-							.insert(extrinsic);
+						entry.extrinsics.insert(extrinsic);
 					}
 				}
 			}
@@ -466,11 +457,7 @@ impl OverlayedChanges {
 			for (key, val) in top_to_commit.into_iter() {
 				let entry = self.committed.top.entry(key).or_default();
 				entry.value = val.value;
-
-				if let Some(prospective_extrinsics) = val.extrinsics {
-					entry.extrinsics.get_or_insert_with(Default::default)
-						.extend(prospective_extrinsics);
-				}
+				entry.extrinsics.extend(val.extrinsics);
 			}
 			for (storage_key, (map, child_info)) in self.prospective.children_default.drain() {
 				let child_content = self.committed.children_default.entry(storage_key)
@@ -479,11 +466,7 @@ impl OverlayedChanges {
 				for (key, val) in map.into_iter() {
 					let entry = child_content.0.entry(key).or_default();
 					entry.value = val.value;
-
-					if let Some(prospective_extrinsics) = val.extrinsics {
-						entry.extrinsics.get_or_insert_with(Default::default)
-							.extend(prospective_extrinsics);
-					}
+					entry.extrinsics.extend(val.extrinsics);
 				}
 			}
 		}
@@ -609,7 +592,7 @@ impl OverlayedChanges {
 	pub(crate) fn set_extrinsic_index(&mut self, extrinsic_index: u32) {
 		self.prospective.top.insert(EXTRINSIC_INDEX.to_vec(), OverlayedValue {
 			value: Some(extrinsic_index.encode()),
-			extrinsics: None,
+			extrinsics: Default::default(),
 		});
 	}
 
@@ -876,11 +859,11 @@ mod tests {
 		assert_eq!(strip_extrinsic_index(&overlay.prospective.top),
 			vec![
 				(vec![1], OverlayedValue { value: Some(vec![6]),
-				 extrinsics: Some(vec![0, 2].into_iter().collect()) }),
+				 extrinsics: vec![0, 2].into_iter().collect() }),
 				(vec![3], OverlayedValue { value: Some(vec![4]),
-				 extrinsics: Some(vec![1].into_iter().collect()) }),
+				 extrinsics: vec![1].into_iter().collect() }),
 				(vec![100], OverlayedValue { value: Some(vec![101]),
-				 extrinsics: Some(vec![NO_EXTRINSIC_INDEX].into_iter().collect()) }),
+				 extrinsics: vec![NO_EXTRINSIC_INDEX].into_iter().collect() }),
 			].into_iter().collect());
 
 		overlay.commit_prospective();
@@ -894,19 +877,19 @@ mod tests {
 		assert_eq!(strip_extrinsic_index(&overlay.committed.top),
 			vec![
 				(vec![1], OverlayedValue { value: Some(vec![6]),
-				 extrinsics: Some(vec![0, 2].into_iter().collect()) }),
+				 extrinsics: vec![0, 2].into_iter().collect() }),
 				(vec![3], OverlayedValue { value: Some(vec![4]),
-				 extrinsics: Some(vec![1].into_iter().collect()) }),
+				 extrinsics: vec![1].into_iter().collect() }),
 				(vec![100], OverlayedValue { value: Some(vec![101]),
-				 extrinsics: Some(vec![NO_EXTRINSIC_INDEX].into_iter().collect()) }),
+				 extrinsics: vec![NO_EXTRINSIC_INDEX].into_iter().collect() }),
 			].into_iter().collect());
 
 		assert_eq!(strip_extrinsic_index(&overlay.prospective.top),
 			vec![
 				(vec![1], OverlayedValue { value: Some(vec![8]),
-				 extrinsics: Some(vec![4].into_iter().collect()) }),
+				 extrinsics: vec![4].into_iter().collect() }),
 				(vec![3], OverlayedValue { value: Some(vec![7]),
-				 extrinsics: Some(vec![3].into_iter().collect()) }),
+				 extrinsics: vec![3].into_iter().collect() }),
 			].into_iter().collect());
 
 		overlay.commit_prospective();
@@ -914,11 +897,11 @@ mod tests {
 		assert_eq!(strip_extrinsic_index(&overlay.committed.top),
 			vec![
 				(vec![1], OverlayedValue { value: Some(vec![8]),
-				 extrinsics: Some(vec![0, 2, 4].into_iter().collect()) }),
+				 extrinsics: vec![0, 2, 4].into_iter().collect() }),
 				(vec![3], OverlayedValue { value: Some(vec![7]),
-				 extrinsics: Some(vec![1, 3].into_iter().collect()) }),
+				 extrinsics: vec![1, 3].into_iter().collect() }),
 				(vec![100], OverlayedValue { value: Some(vec![101]),
-				 extrinsics: Some(vec![NO_EXTRINSIC_INDEX].into_iter().collect()) }),
+				 extrinsics: vec![NO_EXTRINSIC_INDEX].into_iter().collect() }),
 			].into_iter().collect());
 
 		assert_eq!(overlay.prospective,
