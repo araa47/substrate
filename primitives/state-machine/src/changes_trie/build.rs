@@ -138,7 +138,7 @@ fn prepare_extrinsics_input_inner<'a, B, H, Number>(
 		Number: BlockNumber,
 {
 	changes.changes(child_info.as_ref())
-		.filter(|( _, v)| v.extrinsics().len() > 0)
+		.filter(|( _, v)| v.extrinsics().next().is_some())
 		.try_fold(BTreeMap::new(), |mut map: BTreeMap<&[u8], (ExtrinsicIndex<Number>, Vec<u32>)>, (k, v)| {
 			match map.entry(k) {
 				Entry::Vacant(entry) => {

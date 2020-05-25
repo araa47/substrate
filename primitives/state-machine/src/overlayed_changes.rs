@@ -30,7 +30,7 @@ use std::{mem, ops, collections::{HashMap, BTreeMap, BTreeSet, HashSet}};
 use codec::{Decode, Encode};
 use sp_core::storage::{well_known_keys::EXTRINSIC_INDEX, ChildInfo, ChildType};
 use sp_core::offchain::storage::OffchainOverlayedChanges;
-use smallvec::{smallvec, SmallVec};
+use itertools::Itertools;
 
 use hash_db::Hasher;
 
@@ -45,10 +45,6 @@ pub type StorageCollection = Vec<(StorageKey, Option<StorageValue>)>;
 
 /// In memory arrays of storage values for multiple child tries.
 pub type ChildStorageCollection = Vec<(StorageKey, StorageCollection)>;
-
-/// The number of transactions that are stored inline. Nesting more transactions
-/// triggers heap allocations on creation per value.
-pub const NUM_INLINE_TRANSACTIONS: usize = 32;
 
 /// The overlayed changes to state to be queried on top of the backend.
 ///
@@ -69,23 +65,24 @@ pub struct OverlayedChanges {
 }
 
 /// The storage value, used inside OverlayedChanges.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 #[cfg_attr(test, derive(PartialEq))]
 pub struct OverlayedValue {
-	/// Current value. None if value has been deleted.
-	value: Option<StorageValue>,
+	/// Current value. None if value has been deleted. One value per open nested transaction.
+	value: Vec<Option<StorageValue>>,
 	/// The set of extrinsic indices where the values has been changed.
 	/// Is filled only if runtime has announced changes trie support.
-	extrinsics: BTreeSet<u32>,
+	extrinsics: Vec<BTreeSet<u32>>,
+	last_written: u32,
 }
 
 #[derive(Debug, Default, Clone)]
 struct OverlayedChangeSet {
-	/// Stores the actual changes. One value per open nested transaction.
-	changes: BTreeMap<StorageKey, SmallVec<[OverlayedValue; NUM_INLINE_TRANSACTIONS]>>,
+	/// Stores the actual changes.
+	changes: BTreeMap<StorageKey, OverlayedValue>,
 	/// Stores which keys are dirty per transaction. Needed in order to determine which
 	/// values to merge into the parent transaction on commit.
-	dirty_keys: SmallVec<[HashSet<StorageKey>; NUM_INLINE_TRANSACTIONS]>,
+	dirty_keys: Vec<HashSet<StorageKey>>,
 	/// Stores at which transaction the last writed occured to this changeset. Needed in order
 	/// to determine when to add a new dirty keys set on write (on first write to a new tx).
 	last_written: u32,
@@ -183,6 +180,16 @@ impl<Transaction: Default, H: Hasher, N: BlockNumber> Default for StorageChanges
 	}
 }
 
+impl Default for OverlayedValue {
+	fn default() -> Self {
+		Self {
+			value: vec![Default::default()],
+			extrinsics: vec![Default::default()],
+			.. Default::default()
+		}
+	}
+}
+
 /*
 #[cfg(test)]
 impl std::iter::FromIterator<(StorageKey, OverlayedValue)> for OverlayedChangeSet {
@@ -198,12 +205,26 @@ impl std::iter::FromIterator<(StorageKey, OverlayedValue)> for OverlayedChangeSe
 impl OverlayedValue {
 	/// The most recent value contained in this overlay.
 	pub fn value(&self) -> Option<&StorageValue> {
-		self.value.as_ref()
+		self.value.last()
+			.expect("A StorageValue is always initialized with one value.\
+			The last element is never removed as those are committed changes.")
+			.as_ref()
 	}
 
 	/// List of indices of extrinsics which modified the value using this overlay.
-	pub fn extrinsics(&self) -> impl ExactSizeIterator<Item=&u32> {
-		self.extrinsics.iter()
+	pub fn extrinsics(&self) -> impl Iterator<Item=&u32> {
+		self.extrinsics.iter().flatten().unique()
+	}
+
+	fn value_mut(&mut self) -> Option<&mut StorageValue> {
+		self.value.last()
+			.expect("A StorageValue is always initialized with one value.\
+			The last element is never removed as those are committed changes.")
+			.as_mut()
+	}
+
+	pub fn insert_extrinsic(&mut self, idx: u32) {
+		self.extrinsics.last().expect("").insert(idx);
 	}
 }
 
@@ -213,16 +234,11 @@ impl OverlayedChangeSet {
 	}
 
 	fn get(&self, key: &[u8]) -> Option<&OverlayedValue> {
-		self.changes.get(key).map(|vec| {
-			vec.last().expect("A StorageValue is always initialized with one value.\
-			The last element is never removed as those are committed changes.")
-		})
+		self.changes.get(key)
 	}
 
-	fn modify(&mut self, key: &[u8], in_tx: u32, at_extrinsic: Option<u32>) -> &OverlayedValue {
-		let vec = self.changes.entry(key.to_vec()).or_insert_with(|| smallvec![Default::default()]);
+	fn modify(&mut self, key: &[u8], in_tx: u32, at_extrinsic: Option<u32>) -> &mut OverlayedValue {
 		if self.last_written < in_tx {
-			vec.push(Default::default());
 			self.dirty_keys.push(Default::default());
 			self.last_written = in_tx;
 		}
@@ -230,12 +246,18 @@ impl OverlayedChangeSet {
 		if let Some(dirty) = self.dirty_keys.last() {
 			dirty.insert(key.to_vec());
 		}
-		let value = vec.last().expect("A StorageValue is always initialized with one value.\
-			The last element is never removed as those are committed changes.");
-		if let Some(extrinsic) = at_extrinsic {
-			value.extrinsics.insert(extrinsic);
+
+		let overlayed = self.changes.entry(key.to_vec()).or_insert_with(Default::default);
+		if overlayed.last_written < in_tx {
+			overlayed.value.push(Default::default());
+			overlayed.extrinsics.push(Default::default());
 		}
-		value
+
+		if let Some(extrinsic) = at_extrinsic {
+			overlayed.insert_extrinsic(extrinsic);
+		}
+
+		overlayed
 	}
 }
 
