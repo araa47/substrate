@@ -7864,6 +7864,7 @@ dependencies = [
  "parity-scale-codec",
  "parking_lot 0.10.2",
  "rand 0.7.3",
+ "smallvec 1.4.0",
  "sp-core",
  "sp-externalities",
  "sp-panic-handler",
